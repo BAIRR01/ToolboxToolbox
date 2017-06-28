@@ -14,6 +14,9 @@ function results = tbFetchToolboxes(config, varargin)
 %
 % 2016 benjamin.heasly@gmail.com
 
+% 6/24/17  dhb  Add # syntax for dealing with projects that we want to
+%               treat as toolboxes, while also treating them as independent projects.
+
 prefs = tbParsePrefs(varargin{:});
 
 parser = inputParser();
@@ -33,7 +36,8 @@ nToolboxes = numel(results);
 for tt = 1:nToolboxes
     record = tbToolboxRecord(config(tt));
     if isempty(record.name)
-        results(tt).status = -1;
+        re
+        tbsults(tt).status = -1;
         results(tt).command = '';
         results(tt).message = 'no toolbox name given';
         continue;
@@ -53,10 +57,25 @@ for tt = 1:nToolboxes
     if isempty(record.toolboxRoot)
         % put this toolbox with all the other toolboxes
         obtainRoot = prefs.toolboxRoot;
+    elseif (record.toolboxRoot(1) == '#')
+        % If there is a toolbox with this name under projects, use its location.
+        % Otherwise get it and put it in the specified place under the projects directory.
+        obtainRoot = tbLocateProject(record.name);
+        if (isempty(obtainRoot))
+            if length(record.toolboxRoot == 1)
+                obtainRoot = fullfile(prefs.toolboxRoot,'..','projects');
+            else
+                obtainRoot = fullfile(prefs.toolboxRoot,'..','projects',record.toolboxRoot(2:end));
+            end
+        else
+            obtainRoot = fileparts(obtainRoot);
+        end
+        record.toolboxRoot = obtainRoot;
     else
-        % put this toolbox in its own special place
-        obtainRoot = tbHomePathToAbsolute(record.toolboxRoot);
+        % put the toolbox in the specified special place.
+        obtainRoot = tbHomePathToAbsolute(record.toolboxRoot);  
     end
+        
     if 7 ~= exist(obtainRoot, 'dir')
         mkdir(obtainRoot);
     end
@@ -65,7 +84,7 @@ for tt = 1:nToolboxes
     [updatePath, displayName, updateRoot] = tbLocateToolbox(record, prefs);
     if isempty(updatePath)
         % obtain the toolbox
-        fprintf('Obtaining "%s".\n', displayName);
+        if (prefs.verbose) fprintf('Obtaining "%s".\n', displayName); end
         results(tt).operation = 'obtain';
         obtainPath = strategy.toolboxPath(obtainRoot, record);
         [results(tt).command, results(tt).status, results(tt).message] = ...
@@ -74,9 +93,9 @@ for tt = 1:nToolboxes
     else
         % toolbox is there already -- update it?
         if strcmp(record.update, 'never')
-            fprintf('Found "%s" and skipping update.\n', displayName);
+            if (prefs.verbose) fprintf('Found "%s" and skipping update.\n', displayName); end
         else
-            fprintf('Updating "%s".\n', displayName);
+            if (prefs.verbose) fprintf('Updating "%s".\n', displayName); end
             results(tt).operation = 'update';
             [results(tt).command, results(tt).status, results(tt).message] = ...
                 strategy.update(record, updateRoot, updatePath);

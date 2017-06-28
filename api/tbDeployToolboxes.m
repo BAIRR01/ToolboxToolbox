@@ -25,6 +25,8 @@ function [resolved, included] = tbDeployToolboxes(varargin)
 %
 % 2016 benjamin.heasly@gmail.com
 
+% 6/24/17  dhb  Handle special # syntax for toolboxRoot.
+
 [prefs, others] = tbParsePrefs(varargin{:});
 
 parser = inputParser();
@@ -54,14 +56,14 @@ self = tbToolboxRecord( ...
 strategy = tbChooseStrategy(self, prefs);
 [flavor,flavorlong,originflavorlong] = strategy.detectFlavor(self);
 if (isempty(flavorlong))
-    fprintf(2,'Cannot detect local ToolboxToolbox revision number and thus cannot tell if it is up to date\n\n');
+    if (prefs.verbose) fprintf(2,'Cannot detect local ToolboxToolbox revision number and thus cannot tell if it is up to date\n\n'); end
 elseif (isempty(originflavorlong))
-    fprintf(2,'Cannot detect ToolboxToolbox revision number on gitHub and thus cannot tell if local copy is up to date\n\n');
+    if (prefs.verbose) fprintf(2,'Cannot detect ToolboxToolbox revision number on gitHub and thus cannot tell if local copy is up to date\n\n'); end
 elseif (strcmp(flavorlong,originflavorlong))
-    fprintf('Local copy of ToolboxToolbox is up to date.\n');
+    if (prefs.verbose) fprintf('Local copy of ToolboxToolbox is up to date.\n'); end
 else
-    fprintf(2,'Local copy of ToolboxTooblox out of date (or you made local modifications).\n');
-    fprintf(2,'Consider updating with git pull or otherwise synchronizing.\n\n');
+    if (prefs.verbose) fprintf(2,'Local copy of ToolboxTooblox out of date (or you made local modifications).\n'); end
+    if (prefs.verbose) fprintf(2,'Consider updating with git pull or otherwise synchronizing.\n\n'); end
 end
 
 %% Convert registered toolbox names to "include" records.
@@ -90,8 +92,10 @@ end
 if ~isempty(name)
     isName = strcmp(name, {config.name});
     if ~any(isName)
-        fprintf('Have configurations with names: %s.\n', sprintf('"%s", ', config.name));
-        fprintf('  but none with name "%s".\n', name);
+        if (prefs.verbose)
+            fprintf('Have configurations with names: %s.\n', sprintf('"%s", ', config.name));
+            fprintf('  but none with name "%s".\n', name);
+        end
         resolved = [];
         included = [];
         return;
@@ -105,14 +109,16 @@ registry = tbFetchRegistry(prefs, 'doUpdate', true);
 if 0 ~= registry.status
     registryPath = tbLocateToolbox(registry, prefs);
     if isempty(registryPath)
-        fprintf('Unable to fetch toolbox registry "%s".\n', registry.name);
-        fprintf('  command was: %s.\n', registry.command);
-        fprintf('  message was: %s\n', registry.message);
+        if (prefs.verbose)   
+            fprintf('Unable to fetch toolbox registry "%s".\n', registry.name);
+            fprintf('  command was: %s.\n', registry.command);
+            fprintf('  message was: %s\n', registry.message);
+        end
         resolved = [];
         included = [];
         return;
     else
-        fprintf('Unable to update toolbox registry "%s", proceeding with current version.\n', registry.name);
+        if (prefs.verbose) fprintf('Unable to update toolbox registry "%s", proceeding with current version.\n', registry.name); end
     end
 end
 
@@ -126,11 +132,13 @@ included = tbDealField(included, 'status', 0);
 included = tbDealField(included, 'message', '');
 
 if isempty(resolved)
-    fprintf('Unable to resolve any configurations.\n');
-    fprintf('  configPath to try loading was: %s\n', prefs.configPath);
-    fprintf('  explicit config struct contained %d records.\n', numel(config));
-    fprintf('  registered toolboxes had names: %s.\n', sprintf('"%s", ', registered{:}));
-    fprintf('Proceeding in case there''s a hook or localHook to be run.\n');
+    if (prefs.verbose)
+        fprintf('Unable to resolve any configurations.\n');
+        fprintf('  configPath to try loading was: %s\n', prefs.configPath);
+        fprintf('  explicit config struct contained %d records.\n', numel(config));
+        fprintf('  registered toolboxes had names: %s.\n', sprintf('"%s", ', registered{:}));
+        fprintf('Proceeding in case there''s a hook or localHook to be run.\n');
+    end
 end
 
 
@@ -146,6 +154,15 @@ if prefs.addToPath
     nToolboxes = numel(resolved);
     for tt = 1:nToolboxes
         record = resolved(tt);
+        
+        % Kluge up and handle case where we have a project as toolbox.
+        if (~isempty(record.toolboxRoot) & record.toolboxRoot(1) == '#')
+            toolboxRoot = tbLocateProject(record.name);
+            if (isempty(toolboxRoot))
+                error('We think the project should have been fetched by now');
+            end
+            record.toolboxRoot = fileparts(toolboxRoot);
+        end
         
         % base folder for the toolbox
         [toolboxPath, displayName] = tbLocateToolbox(record, prefs);
@@ -164,7 +181,7 @@ if prefs.addToPath
         for ss = 1:nSubfolders
             pathToAdd = fullfile(toolboxPath, subfolders{ss});
             if 7 == exist(pathToAdd, 'dir')
-                fprintf('Adding "%s" to path at "%s".\n', displayName, pathToAdd);
+                if (prefs.verbose) fprintf('Adding "%s" to path at "%s".\n', displayName, pathToAdd); end
                 record.strategy.addToPath(record, pathToAdd);
             end
         end
@@ -202,8 +219,10 @@ for tt = 1:nToolboxes
     end
     
     try
-        fprintf('Checking requirementHook for "%s": "%s".\n', ...
-            toolboxName, record.requirementHook);
+        if (prefs.verbose)
+            fprintf('Checking requirementHook for "%s": "%s".\n', ...
+                toolboxName, record.requirementHook);
+        end
         [status, message, advice] = feval(record.requirementHook);
     catch err
         status = -1;
@@ -215,10 +234,10 @@ for tt = 1:nToolboxes
     resolved(tt).message = message;
     
     if 0 == status
-        fprintf('  OK: "%s".\n', message);
+        if (prefs.verbose) fprintf('  OK: "%s".\n', message); end
     else
-        fprintf('  Requirement not met: "%s".\n', message);
-        fprintf('  Suggestion: "%s".\n', advice);
+        if (prefs.verbose) fprintf('  Requirement not met: "%s".\n', message); end
+        if (prefs.verbose) fprintf('  Suggestion: "%s".\n', advice); end
     end
 end
 
@@ -233,33 +252,35 @@ for tt = 1:nToolboxes
         continue;
     end
     
-    fprintf('Evaluating general-purpose hook for "%s": "%s".\n', ...
-        toolboxName, record.hook);
+    if (prefs.verbose)
+        fprintf('Evaluating general-purpose hook for "%s": "%s".\n', ...
+            toolboxName, record.hook);
+    end
     [status, message] = evalIsolated(record.hook);
     resolved(tt).status = status;
     resolved(tt).message = message;
     if 0 == status
-        fprintf('  OK: "%s".\n', message);
+        if (prefs.verbose) fprintf('  OK: "%s".\n', message); end
     else
-        fprintf('  Hook had an error with status %d and message "%s".\n', status, message);
+        if (prefs.verbose) fprintf('  Hook had an error with status %d and message "%s".\n', status, message); end
     end
 end
 
 
 %% How did it go?
-resolved = reviewRecords(resolved);
+resolved = reviewRecords(resolved,prefs);
 if ~isempty(resolved)
     if all(tbCollectField(resolved, 'isOk', 'template', []))
-        fprintf('Looks good: %d resolved toolboxes deployed OK.\n', numel(resolved));
+        if (prefs.verbose) fprintf('Looks good: %d resolved toolboxes deployed OK.\n', numel(resolved)); end
     else
-        fprintf('Something went wrong with resolved toolboxes, please see above.\n');
+        if (prefs.verbose) fprintf('Something went wrong with resolved toolboxes, please see above.\n'); end
     end
 end
 
 if ~isempty(included)
-    included = reviewRecords(included);
+    included = reviewRecords(included,prefs);
     if ~all(tbCollectField(included, 'isOk', 'template', []))
-        fprintf('Something went wrong with included toolboxes, please see above.\n');
+        if (prefs.verbose) fprintf('Something went wrong with included toolboxes, please see above.\n'); end
     end
 end
 
@@ -267,7 +288,7 @@ end
 %% Invoke a local hook, create if necessary.
 function record = invokeLocalHook(record, prefs)
 [toolboxPath, hookName] = tbLocateToolbox(record, prefs);
-fprintf('Checking for "%s" local hook.\n', hookName);
+if (prefs.verbose) fprintf('Checking for "%s" local hook.\n', hookName); end
 
 % look for Foo.m or FooLocalHook.m
 simpleHookPath = fullfile(prefs.localHookFolder, [hookName '.m']);
@@ -279,7 +300,7 @@ explicitHookExists = 2 == exist(explicitHookPath, 'file');
 templatePath = fullfile(toolboxPath, record.localHookTemplate);
 templateExists = 2 == exist(templatePath, 'file');
 if ~simpleHookExists && ~explicitHookExists && templateExists
-    fprintf('  Creating local hook from template "%s".\n', templatePath);
+    if (prefs.verbose) fprintf('  Creating local hook from template "%s".\n', templatePath); end
     copyfile(templatePath, explicitHookPath);
     explicitHookExists = true;
 end
@@ -295,15 +316,17 @@ end
 
 % invoke the local hook if it exists
 if ~isempty(hookPath);
-    fprintf('  Running local hook "%s".\n', hookPath);
+    if (prefs.verbose) fprintf('  Running local hook "%s".\n', hookPath); end
     command = ['run ' hookPath];
     [record.status, record.message] = evalIsolated(command);
     
     if 0 == record.status
-        fprintf('  Hook success with status 0.\n');
+        if (prefs.verbose) fprintf('  Hook success with status 0.\n'); end
     else
-        fprintf('  Hook had an error with status %d and result "%s".\n', ...
+        if (prefs.verbose)
+            fprintf('  Hook had an error with status %d and result "%s".\n', ...
             record.status, record.message);
+        end
     end
 end
 
@@ -327,23 +350,27 @@ end
 
 
 %% Display errors and warnings for each record.
-function records = reviewRecords(records)
+function records = reviewRecords(records,prefs)
 isSuccess = 0 == tbCollectField(records, 'status', 'template', []);
 isOptional = strcmp(tbCollectField(records, 'importance', 'template', {}), 'optional');
 
 isSkipped = ~isSuccess & isOptional;
 for tt = find(isSkipped)
     record = records(tt);
-    fprintf('Skipped: "%s" had status %d, message "%s"\n', ...
-        record.name, record.status, strtrim(record.message));
+    if (prefs.verbose)
+        fprintf('Skipped: "%s" had status %d, message "%s"\n', ...
+            record.name, record.status, strtrim(record.message));
+    end
 end
 
 isError = ~isSuccess & ~isOptional;
 records = tbDealField(records, 'isOk', true);
 for tt = find(isError)
     record = records(tt);
-    fprintf('Error: "%s" had status %d, message "%s"\n', ...
-        record.name, record.status, strtrim(record.message));
+    if (prefs.verbose)
+        fprintf('Error: "%s" had status %d, message "%s"\n', ...
+            record.name, record.status, strtrim(record.message));
+    end
     records(tt).isOk = false;
 end
 
